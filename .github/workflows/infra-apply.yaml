@@ -58,38 +58,41 @@ jobs:
           kubectl get pods -A
 
   seed-services:
-    # Only run when the workflow was manually dispatched (Day-0)
     if: ${{ github.event_name == 'workflow_dispatch' }}
     needs: apply
     runs-on: ubuntu-latest
     steps:
-      - name: Authenticate gh
-        env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}    # PAT with "repo" scope
-        run: echo "$GH_TOKEN" | gh auth login --with-token
-
       - name: Trigger CI for all services
         env:
-          ORG: ${{ env.ORG }}
-          SERVICES: ${{ env.SERVICES }}
+          GH_TOKEN: ${{ secrets.GH_PAT }}   # PAT with repo + workflow scopes
+          ORG: Recipies-Polyglot-Org
+          SERVICES: |
+            api-gate-microservice
+            userdata-microservice
+            suggest-microservice
+            frontend-react
         run: |
           set -euo pipefail
-          while read -r REPO; do
+          while IFS= read -r REPO; do
             [ -z "$REPO" ] && continue
             echo "Triggering CI in $ORG/$REPO"
             gh workflow run CI --repo "$ORG/$REPO" --ref master || true
           done <<< "$SERVICES"
-
+  
       - name: Wait for CI success (their CD will deploy)
         env:
-          ORG: ${{ env.ORG }}
-          SERVICES: ${{ env.SERVICES }}
+          GH_TOKEN: ${{ secrets.GH_PAT }}   # same token; no login needed
+          ORG: Recipies-Polyglot-Org
+          SERVICES: |
+            api-gate-microservice
+            userdata-microservice
+            suggest-microservice
+            frontend-react
         run: |
           set -euo pipefail
-          while read -r REPO; do
+          while IFS= read -r REPO; do
             [ -z "$REPO" ] && continue
             echo "Waiting for CI in $ORG/$REPO ..."
-            # give the run a moment to show up
             sleep 5
             for i in {1..60}; do
               run=$(gh run list --repo "$ORG/$REPO" --workflow CI --branch master --limit 1 --json status,conclusion -q '.[0]')
