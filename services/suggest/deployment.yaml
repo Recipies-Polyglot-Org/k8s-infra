@@ -17,6 +17,7 @@ spec:
       containers:
       - name: backend
         image: akshat1414/suggest-microservice:latest
+        imagePullPolicy: Always
         ports:
         - containerPort: 8083
         resources:
