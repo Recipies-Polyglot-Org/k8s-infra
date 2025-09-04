@@ -37,7 +37,7 @@ jobs:
 
       # ---- Services ----
       - name: Apply Services
-        run: kubectl apply -f services/
+        run: kubectl apply -R -f services/
 
       # ---- Quick snapshot ----
       - name: Snapshot
@@ -45,5 +45,6 @@ jobs:
           kubectl get nodes
           kubectl get deploy,svc,ingress
           kubectl get pods -A
+
 
 
