@@ -45,3 +45,4 @@ jobs:
           kubectl get nodes
           kubectl get deploy,svc,ingress
           kubectl get pods -A
+
