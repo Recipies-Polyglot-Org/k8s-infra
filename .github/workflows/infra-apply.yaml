@@ -1,13 +1,30 @@
 name: Infra Apply (Day-0 & Day-N)
 
 on:
-  workflow_dispatch:         # Day-0: trigger manually
-  push:                      # Day-N: auto-apply when infra YAMLs change
+  workflow_dispatch: {}              # Day-0: trigger manually
+  push:                              # Day-N: auto-apply when infra YAMLs change
     branches: [ "master" ]
+    paths:
+      - "base/**"
+      - ".github/workflows/**"
+      - "scripts/**"
+
+concurrency:
+  group: infra-apply
+  cancel-in-progress: true
+
+env:
+  ORG: Recipies-Polyglot-Org
+  # repo list (exact repo names)
+  SERVICES: |
+    api-gate-microservice
+    userdata-microservice
+    suggest-microservice
+    frontend-react
 
 jobs:
   apply:
-    runs-on: [self-hosted, linux, X64]     # your org-level EC2 runner
+    runs-on: [self-hosted, linux, X64]
     steps:
       - uses: actions/checkout@v4
 
@@ -15,12 +32,11 @@ jobs:
       - name: Bootstrap machine if needed
         run: |
           set -euo pipefail
-          echo "Checking if bootstrap is needed..."
           if ! command -v kubectl >/dev/null 2>&1 || ! kubectl get nodes >/dev/null 2>&1; then
-            echo "Running bootstrap.sh (install JDK, Maven, Docker, Kubernetes)..."
-            sudo bash ./bootstrap.sh
+            echo "Running bootstrap.sh..."
+            sudo bash ./scripts/bootstrap.sh
           else
-            echo "Bootstrap not needed. kubectl and cluster are ready."
+            echo "Cluster already initialized."
           fi
 
       # ---- Secrets (safe to re-run) ----
@@ -32,21 +48,54 @@ jobs:
             --from-literal=AWS_REGION='${{ secrets.AWS_REGION }}' \
             --dry-run=client -o yaml | kubectl apply -f -
 
-      # ---- Base infra ----
+      # ---- Base infra (recursive apply) ----
       - name: Apply Base
-        run: kubectl apply -f base/
+        run: kubectl apply -R -f base/
 
-      # ---- Services ----
-      - name: Apply Services
-        run: kubectl apply -R -f services/
-
-      # ---- Quick snapshot ----
+      # ---- Snapshot ----
       - name: Snapshot
         run: |
           kubectl get nodes
-          kubectl get deploy,svc,ingress
+          kubectl get deploy,svc,ingress -A
           kubectl get pods -A
 
+  # Day-0 only: trigger service builds so their repo-level CD deploys them
+  seed-services:
+    if: ${{ github.event_name == 'workflow_dispatch' }}
+    needs: apply
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install GitHub CLI
+        uses: cli/cli-action@v2
 
+      - name: Trigger CI for all services
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}   # PAT with 'repo' scope
+          ORG: ${{ env.ORG }}
+          SERVICES: ${{ env.SERVICES }}
+        run: |
+          set -euo pipefail
+          while read -r REPO; do
+            [ -z "$REPO" ] && continue
+            echo "Triggering CI in $ORG/$REPO ..."
+            gh workflow run CI --repo "$ORG/$REPO" --ref master || true
+          done <<< "$SERVICES"
 
-
+      - name: Wait for CI success (their CD will deploy)
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          ORG: ${{ env.ORG }}
+          SERVICES: ${{ env.SERVICES }}
+        run: |
+          set -euo pipefail
+          while read -r REPO; do
+            [ -z "$REPO" ] && continue
+            echo "Waiting for CI in $ORG/$REPO ..."
+            for i in {1..60}; do
+              run=$(gh run list --repo "$ORG/$REPO" --workflow CI --branch master --limit 1 --json status,conclusion -q '.[0]')
+              concl=$(echo "$run" | jq -r '.conclusion // ""')
+              if [ "$concl" = "success" ]; then break; fi
+              sleep 10
+            done
+            [ "$concl" = "success" ] || { echo "CI failed or timed out in $REPO"; exit 1; }
+          done <<< "$SERVICES"
