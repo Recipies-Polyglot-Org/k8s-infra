@@ -17,6 +17,7 @@ spec:
       containers:
       - name: frontend
         image: akshat1414/frontend-react:latest
+        imagePullPolicy: Always
         ports:
         - containerPort: 80
         resources:
