@@ -170,7 +170,7 @@ jobs:
   
   
   monitoring:
-    needs: apply
+    needs: seed-services
     runs-on: [self-hosted, linux, X64]
     steps:
       - uses: actions/checkout@v4
