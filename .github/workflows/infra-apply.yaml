@@ -199,7 +199,7 @@ jobs:
           NAMESPACE=monitoring
           VALUES=base/monitoring/values-kube-prom.yaml
           helm upgrade --install $RELEASE prometheus-community/kube-prometheus-stack \
-            -n $NAMESPACE --create-namespace --values "$VALUES" --atomic --wait --timeout 10m
+            -n $NAMESPACE --create-namespace --values "$VALUES" --wait --timeout 20m
 
       - name: Apply ServiceMonitors and Grafana ingress
         run: |
