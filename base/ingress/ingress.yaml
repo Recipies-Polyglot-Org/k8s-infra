@@ -39,3 +39,10 @@ spec:
             name: backend-service-apigate
             port:
               number: 80
+      - path: /grafana(/|$)(.*)     # <--- added path for Grafana
+        pathType: Prefix
+        backend:
+          service:
+            name: kube-prometheus-stack-grafana
+            port:
+              number: 80

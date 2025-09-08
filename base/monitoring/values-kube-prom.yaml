@@ -1,0 +1,48 @@
+# Minimal kube-prometheus-stack values for small test cluster
+prometheus:
+  prometheusSpec:
+    retention: "7d"
+    resources:
+      requests:
+        cpu: "250m"
+        memory: "512Mi"
+      limits:
+        cpu: "500m"
+        memory: "1Gi"
+    # reduce replicas (single-node labs)
+    replicas: 1
+    # small disk to avoid huge usage
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          accessModes: ["ReadWriteOnce"]
+          resources:
+            requests:
+              storage: 5Gi
+
+grafana:
+  grafana.ini:
+    server:
+      root_url: "%(protocol)s://%(domain)s:%(http_port)s/grafana/"
+      serve_from_sub_path: true
+  enabled: true
+  adminUser: admin
+  adminPassword: changeme123          # change in production or use secret
+  persistence:
+    enabled: true
+    size: 2Gi
+  ingress:
+    enabled: false  # we provide a separate ingress manifest; switch to true if prefer helm-managed ingress
+
+prometheusOperator:
+  tlsProxy:
+    enabled: false
+
+kubeStateMetrics:
+  enabled: true
+
+nodeExporter:
+  enabled: true
+
+alertmanager:
+  enabled: true

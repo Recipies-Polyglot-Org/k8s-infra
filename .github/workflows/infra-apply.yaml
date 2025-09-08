@@ -163,7 +163,55 @@ jobs:
             fi
   
           done <<< "$SERVICES"
-  
+
+          sleep 60
           echo "All services' CI workflows finished successfully in sequence."
+          
   
   
+  monitoring:
+    needs: apply
+    runs-on: [self-hosted, linux, X64]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Ensure helm installed
+        run: |
+          if ! command -v helm >/dev/null 2>&1; then
+            curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+          fi
+          helm version
+
+      - name: Create monitoring namespace
+        run: kubectl apply -f base/monitoring/namespace.yaml
+
+      - name: Add Helm repos
+        run: |
+          helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+          helm repo add grafana https://grafana.github.io/helm-charts
+          helm repo update
+
+      - name: Install/Upgrade kube-prometheus-stack
+        run: |
+          RELEASE=kube-prom
+          NAMESPACE=monitoring
+          VALUES=base/monitoring/values-kube-prom.yaml
+          helm upgrade --install $RELEASE prometheus-community/kube-prometheus-stack \
+            -n $NAMESPACE --create-namespace --values "$VALUES" --atomic --wait --timeout 10m
+
+      - name: Apply ServiceMonitors and Grafana ingress
+        run: |
+          kubectl apply -f base/monitoring/servicemonitors.yaml
+          kubectl apply -f base/monitoring/grafana-ingress.yaml || true
+
+      - name: Wait for monitoring pods
+        run: |
+          kubectl -n monitoring rollout status deploy/kube-prometheus-stack-grafana --timeout=3m || true
+          kubectl -n monitoring rollout status statefulset/prometheus-kube-prometheus-prometheus --timeout=5m || true
+
+      - name: Snapshot monitoring resources
+        run: |
+          kubectl get pods -n monitoring
+          kubectl get svc -n monitoring
