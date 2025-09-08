@@ -74,49 +74,95 @@ jobs:
           kubectl get pods -A
 
   seed-services:
-    if: ${{ github.event_name == 'workflow_dispatch' }}
-    needs: apply
-    runs-on: ubuntu-latest
-    steps:
-      - name: Trigger CI for all services
-        env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}   # PAT with repo + workflow scopes
-          ORG: Recipies-Polyglot-Org
-          SERVICES: |
-            api-gate-microservice
-            userdata-microservice
-            suggest-microservice
-            frontend-react
-        run: |
-          set -euo pipefail
-          while IFS= read -r REPO; do
-            [ -z "$REPO" ] && continue
-            echo "Triggering CI in $ORG/$REPO"
-            gh workflow run CI --repo "$ORG/$REPO" --ref master || true
-          done <<< "$SERVICES"
-  
-      - name: Wait for CI success (their CD will deploy)
-        env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}   # same token; no login needed
-          ORG: Recipies-Polyglot-Org
-          SERVICES: |
-            api-gate-microservice
-            userdata-microservice
-            suggest-microservice
-            frontend-react
-        run: |
-          set -euo pipefail
-          while IFS= read -r REPO; do
-            [ -z "$REPO" ] && continue
-            echo "Waiting for CI in $ORG/$REPO ..."
-            sleep 5
-            for i in {1..60}; do
-              run=$(gh run list --repo "$ORG/$REPO" --workflow CI --branch master --limit 1 --json status,conclusion -q '.[0]')
-              status=$(echo "$run" | jq -r '.status // ""')
-              concl=$(echo "$run" | jq -r '.conclusion // ""')
-              echo "status=$status conclusion=$concl"
-              if [ "$concl" = "success" ]; then break; fi
-              sleep 10
-            done
-            [ "$concl" = "success" ] || { echo "CI failed or timed out for $REPO"; exit 1; }
-          done <<< "$SERVICES"
+  if: ${{ github.event_name == 'workflow_dispatch' }}
+  needs: apply
+  runs-on: ubuntu-latest
+  steps:
+    - name: Trigger + wait CI in sequence
+      env:
+        GH_TOKEN: ${{ secrets.GH_PAT }}   # PAT with repo + workflow scopes
+        ORG: Recipies-Polyglot-Org
+        # ORDER MATTERS: userdata -> suggest -> api-gate -> frontend
+        SERVICES: |
+          userdata-microservice
+          suggest-microservice
+          api-gate-microservice
+          frontend-react
+        # tuning
+        MAX_POLL_MINUTES: 20
+        POLL_INTERVAL: 10
+      run: |
+        set -euo pipefail
+
+        # helper: wait for the latest CI run on a repo to finish and be successful
+        wait_for_ci_success() {
+          local repo="$1"
+          local max_minutes="${MAX_POLL_MINUTES}"
+          local poll_interval="${POLL_INTERVAL}"
+          local attempts=$(( (max_minutes * 60) / poll_interval ))
+          echo "Waiting for CI (workflow: CI) on $ORG/$repo to complete (timeout: ${max_minutes}m)..."
+
+          for i in $(seq 1 $attempts); do
+            # get most recent run for workflow=CI on master branch
+            run_json=$(gh run list --repo "$ORG/$repo" --workflow CI --branch master --limit 1 --json databaseId,status,conclusion,headSha -q '.[0]' 2>/dev/null || true)
+
+            if [ -z "$run_json" ] || [ "$run_json" = "null" ]; then
+              echo "  no recent CI run found yet for $repo (attempt $i/$attempts)."
+              sleep "$poll_interval"
+              continue
+            fi
+
+            status=$(echo "$run_json" | jq -r '.status // empty')
+            concl=$(echo "$run_json" | jq -r '.conclusion // empty')
+            id=$(echo "$run_json" | jq -r '.databaseId // empty')
+            sha=$(echo "$run_json" | jq -r '.headSha // empty')
+
+            echo "  run id=$id sha=${sha:0:7} status='$status' conclusion='$concl' (attempt $i/$attempts)"
+
+            if [ "$status" = "completed" ]; then
+              if [ "$concl" = "success" ]; then
+                echo "  CI succeeded for $repo (run id $id)."
+                return 0
+              else
+                echo "  CI completed but conclusion='$concl' for $repo. Failing."
+                return 2
+              fi
+            fi
+
+            # still running / queued
+            sleep "$poll_interval"
+          done
+
+          echo "Timed out waiting for CI success for $repo after ${max_minutes} minutes."
+          return 3
+        }
+
+        # trigger + wait sequentially
+        while IFS= read -r REPO; do
+          [ -z "$REPO" ] && continue
+          echo "=== REPO: $REPO ==="
+
+          echo "Triggering CI workflow in $ORG/$REPO..."
+          # attempt to dispatch CI workflow; allow failure (repo may already auto-run on push)
+          gh workflow run CI --repo "$ORG/$REPO" --ref master || true
+
+          # small backoff so GH shows the run
+          sleep 3
+
+          # wait for the triggered run to succeed
+          wait_for_ci_success "$REPO"
+          rc=$?
+          if [ $rc -eq 0 ]; then
+            echo "CI for $REPO succeeded. Proceeding to next repo."
+          elif [ $rc -eq 2 ]; then
+            echo "CI for $REPO finished but did not succeed. Aborting pipeline."
+            exit 1
+          else
+            echo "CI for $REPO timed out. Aborting pipeline."
+            exit 1
+          fi
+
+        done <<< "$SERVICES"
+
+        echo "All services' CI workflows finished successfully in sequence."
+
