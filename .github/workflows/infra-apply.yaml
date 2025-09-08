@@ -49,65 +49,24 @@ jobs:
 
       # ---- Base infra (recursive) ----
       - name: Apply Base
-        run: kubectl apply -f base/metrics-server.yaml
-
-      - name: Wait for kube-system and CNI to be Ready
         run: |
-          echo "Waiting for kube-system pods to be ready..."
-          kubectl wait --for=condition=Ready pod -n kube-system --all --timeout=300s
+          kubectl apply -f base/metrics-server.yaml
+          sleep 40
+
 
       # step 1
-      - name: Apply ingress controller core (namespace/sa/rbac/service/deployment)
-        run: kubectl apply -f base/ingress/controller-core.yaml
+      - name: Apply ingress controller 
+        run: kubectl apply -f base/ingress/ingress-controller.yaml
 
       - name: Wait for ingress-nginx controller pod(s) Ready
         run: |
           echo "Waiting for ingress controller pods to be Ready..."
-          kubectl -n ingress-nginx wait --for=condition=Ready pod -l app.kubernetes.io/name=ingress-nginx --timeout=300s
+          sleep 60
 
+      - name: Apply ingress
+        run: kubectl apply -f base/ingress/ingress.yaml
 
-      # step 2
-
-      - name: Apply admission certgen jobs (create & patch)
-        run: kubectl apply -f base/ingress/admission-jobs.yaml || true
-
-      - name: Wait for admission jobs to complete and secret to appear
-        run: |
-          set -euo pipefail
-          kubectl -n ingress-nginx wait --for=condition=complete job/ingress-nginx-admission-create --timeout=120s || echo "create job may already be complete"
-          kubectl -n ingress-nginx wait --for=condition=complete job/ingress-nginx-admission-patch --timeout=120s || echo "patch job may already be complete"
-          echo "Waiting for secret ingress-nginx-admission..."
-          for i in $(seq 1 30); do
-            if kubectl -n ingress-nginx get secret ingress-nginx-admission >/dev/null 2>&1; then
-              echo "secret exists"; break
-            fi
-            sleep 2
-          done
-          kubectl -n ingress-nginx get secret ingress-nginx-admission -o yaml
-
-      # step 3
-
-      - name: Wait for admission endpoints to be populated
-        run: |
-          for i in $(seq 1 60); do
-            subsets=$(kubectl -n ingress-nginx get endpoints ingress-nginx-controller-admission -o jsonpath='{.subsets}' 2>/dev/null || echo "")
-            if [ -n "$subsets" ] && [ "$subsets" != "[]" ]; then
-              echo "admission endpoints ready"; exit 0
-            fi
-            echo "waiting for admission endpoints..."
-            kubectl -n ingress-nginx get pods -o wide
-            sleep 5
-          done
-          echo "timed out waiting for admission endpoints" >&2
-          kubectl -n ingress-nginx get endpoints ingress-nginx-controller-admission -o yaml
-          exit 1
-
-      # step 4
-
-      - name: Apply ValidatingWebhookConfiguration and Ingress
-        run: kubectl apply -f base/ingress/webhook-and-ingress.yaml
-
-
+     
       - name: Snapshot
         run: |
           kubectl get nodes
