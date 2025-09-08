@@ -76,3 +76,22 @@ spec:
     - port: metrics
       path: /metrics
       interval: 30s
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: grafana-ingress
+  namespace: monitoring
+  annotations:
+    kubernetes.io/ingress.class: "nginx"
+spec:
+  rules:
+    - http:
+        paths:
+          - path: /grafana
+            pathType: Prefix
+            backend:
+              service:
+                name: kube-prom-grafana        # <-- exact service name in monitoring ns
+                port:
+                  number: 80

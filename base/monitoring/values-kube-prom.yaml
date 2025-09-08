@@ -22,7 +22,7 @@ grafana:
       serve_from_sub_path: true
   enabled: true
   adminUser: admin
-  adminPassword: changeme123          # change in production or use secret
+  adminPassword: admin          # change in production or use secret
   persistence:
     enabled: false
   ingress:
