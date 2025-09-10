@@ -9,9 +9,6 @@ provider "aws" {
   region = var.aws_region
 }
 
-# Use the default security group in the account/VPC
-data "aws_default_security_group" "default" {}
-
 # Render userdata using builtin templatefile()
 locals {
   userdata_rendered = templatefile("${path.module}/userdata.tpl", {
@@ -22,11 +19,11 @@ locals {
 }
 
 resource "aws_instance" "runner" {
-  ami                    = var.ami
-  instance_type          = var.instance_type
-  key_name               = var.key_name
-  vpc_security_group_ids = [data.aws_default_security_group.default.id]
-  user_data              = local.userdata_rendered
+  ami           = var.ami
+  instance_type = var.instance_type
+  key_name      = var.key_name
+  # intentionally do not set vpc_security_group_ids so default SG is used
+  user_data = local.userdata_rendered
 
   root_block_device {
     volume_size = var.root_size_gb
