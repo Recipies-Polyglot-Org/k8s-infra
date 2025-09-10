@@ -88,8 +88,25 @@ jobs:
           
           # install deps and runner files if missing
           if [ ! -d "$RUNNER_DIR" ] || [ ! -f "$RUNNER_DIR/config.sh" ]; then
-            apt-get update -y
+
+            # wait for apt/dpkg locks to be free (max 300s)
+            end=$((SECONDS+300))
+            while fuser /var/lib/dpkg/lock >/dev/null 2>&1 \
+               || fuser /var/lib/apt/lists/lock >/dev/null 2>&1 \
+               || fuser /var/lib/apt/lists/lock-frontend >/dev/null 2>&1 \
+               || ps -ef | grep -E "[a]pt|[a]pt-get|[d]pkg" | grep -v grep >/dev/null 2>&1; do
+              if [ $SECONDS -gt $end ]; then
+                echo "timed out waiting for apt locks" >&2
+                exit 1
+              fi
+              sleep 3
+            done
+            
+            # now safe to install deps
+            DEBIAN_FRONTEND=noninteractive apt-get update -y
             DEBIAN_FRONTEND=noninteractive apt-get install -y curl jq tar
+
+
             mkdir -p "$RUNNER_DIR"
             cd /tmp
             RUNNER_TGZ_URL=$(curl -s https://api.github.com/repos/actions/runner/releases/latest \
