@@ -41,6 +41,18 @@ jobs:
       # ---- Secrets (safe to re-run) ----
       - name: Create/Update AWS Secret
         run: |
+          # wait for API server to be ready (max 5 minutes)
+          end=$((SECONDS+300))
+          until kubectl get --raw="/healthz" >/dev/null 2>&1; do
+            if [ $SECONDS -gt $end ]; then
+              echo "timed out waiting for API server" >&2
+              kubectl get pods -A || true
+              exit 1
+            fi
+            sleep 5
+          done
+          echo "API server ready"
+
           kubectl create secret generic aws-secrets \
             --from-literal=AWS_ACCESS_KEY_ID='${{ secrets.AWS_ACCESS_KEY_ID }}' \
             --from-literal=AWS_SECRET_ACCESS_KEY='${{ secrets.AWS_SECRET_ACCESS_KEY }}' \
@@ -215,4 +227,5 @@ jobs:
         run: |
           kubectl get pods -n monitoring
           kubectl get svc -n monitoring
+
 
