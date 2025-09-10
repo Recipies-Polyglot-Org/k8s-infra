@@ -59,7 +59,7 @@ jobs:
           fi
           printf "token=%s\n" "$TOKEN" >> "$GITHUB_OUTPUT"
 
-      - name: Register runner via SSH (use fresh token)
+      - name: Register runner via SSH (wait for SSH + register)
         id: sshreg
         env:
           SSH_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
@@ -77,36 +77,42 @@ jobs:
           printf "%s\n" "$SSH_KEY" > /tmp/sshkey/id_rsa
           chmod 600 /tmp/sshkey/id_rsa
 
-          sleep 10
+          # wait for SSH port 22 to be open (timeout 300s)
+          end=$((SECONDS + 300))
+          echo "waiting for SSH on ${RUNNER_IP}..."
+          while ! timeout 5 bash -c "</dev/tcp/${RUNNER_IP}/22" >/dev/null 2>&1; do
+            if [ $SECONDS -gt $end ]; then
+              echo "timeout waiting for SSH on ${RUNNER_IP}" >&2
+              exit 1
+            fi
+            sleep 3
+          done
+          echo "SSH reachable"
 
+          # create idempotent register script
           cat > /tmp/register.sh <<'SCRIPT'
           #!/bin/bash
           set -euo pipefail
-          
           TOKEN="$1"
           RUNNER_DIR="/opt/actions-runner"
           
-          # install deps and runner files if missing
+          # wait for apt/dpkg locks (max 300s)
+          end=$((SECONDS+300))
+          while fuser /var/lib/dpkg/lock >/dev/null 2>&1 \
+            || fuser /var/lib/apt/lists/lock >/dev/null 2>&1 \
+            || fuser /var/lib/apt/lists/lock-frontend >/dev/null 2>&1 \
+            || ps -ef | grep -E "[a]pt|[a]pt-get|[d]pkg" | grep -v grep >/dev/null 2>&1; do
+            if [ $SECONDS -gt $end ]; then
+              echo "timed out waiting for apt locks" >&2
+              exit 1
+            fi
+            sleep 3
+          done
+          
+          # install runner files if missing
           if [ ! -d "$RUNNER_DIR" ] || [ ! -f "$RUNNER_DIR/config.sh" ]; then
-
-            # wait for apt/dpkg locks to be free (max 300s)
-            end=$((SECONDS+300))
-            while fuser /var/lib/dpkg/lock >/dev/null 2>&1 \
-               || fuser /var/lib/apt/lists/lock >/dev/null 2>&1 \
-               || fuser /var/lib/apt/lists/lock-frontend >/dev/null 2>&1 \
-               || ps -ef | grep -E "[a]pt|[a]pt-get|[d]pkg" | grep -v grep >/dev/null 2>&1; do
-              if [ $SECONDS -gt $end ]; then
-                echo "timed out waiting for apt locks" >&2
-                exit 1
-              fi
-              sleep 3
-            done
-            
-            # now safe to install deps
             DEBIAN_FRONTEND=noninteractive apt-get update -y
             DEBIAN_FRONTEND=noninteractive apt-get install -y curl jq tar
-
-
             mkdir -p "$RUNNER_DIR"
             cd /tmp
             RUNNER_TGZ_URL=$(curl -s https://api.github.com/repos/actions/runner/releases/latest \
@@ -120,10 +126,9 @@ jobs:
           
           cd "$RUNNER_DIR" || { echo "runner dir missing"; exit 1; }
           
-          # configure/register runner (idempotent)
           sudo -u githubrunner bash -lc "./config.sh --unattended --url https://github.com/Recipies-Polyglot-Org --token \"$TOKEN\" --name runner-manual-$(hostname)-$(date +%s) --labels self-hosted,linux,X64 --work _work --replace || true"
           
-          # create systemd unit
+          # create correct systemd unit (note multi-user.target)
           sudo bash -lc 'printf "%s\n" "[Unit]" "Description=GitHub Actions Runner" "After=network.target" "" "[Service]" "Type=simple" "User=githubrunner" "WorkingDirectory=/opt/actions-runner" "ExecStart=/opt/actions-runner/run.sh" "Restart=always" "RestartSec=5s" "" "[Install]" "WantedBy=multi-user.target" > /etc/systemd/system/github-runner.service' || true
           
           sudo systemctl daemon-reload || true
