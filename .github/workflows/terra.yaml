@@ -1,7 +1,7 @@
 name: Deploy Runner (Terraform) - post-apply registration
 
 on:
-  workflow_dispatch: { }
+  workflow_dispatch:
 
 jobs:
   terraform:
@@ -34,7 +34,6 @@ jobs:
         working-directory: terra
         id: tfout
         run: |
-          # output runner_public_ip as workflow output
           IP=$(terraform output -raw runner_public_ip)
           echo "IP=$IP" >> "$GITHUB_OUTPUT"
 
@@ -58,23 +57,21 @@ jobs:
           RUNNER_IP: ${{ steps.tfout.outputs.IP }}
           REG_TOKEN: ${{ steps.regtoken2.outputs.token }}
         run: |
-          mkdir -p /tmp/sshkey && chmod 700 /tmp/sshkey
+          mkdir -p /tmp/sshkey
+          chmod 700 /tmp/sshkey
           echo "$SSH_KEY" > /tmp/sshkey/id_rsa
           chmod 600 /tmp/sshkey/id_rsa
 
-          # wait a few seconds for cloud-init to finish -> adjust sleep if your AMI needs more boot time
+          # small pause for cloud-init to finish
           sleep 10
 
-          # pipe the token into the remote script so token isn't echoed in logs
-          echo "$REG_TOKEN" | ssh -o StrictHostKeyChecking=no -i /tmp/sshkey/id_rsa ubuntu@$RUNNER_IP 'bash -s' <<'REMOTE'
+          # pass token via stdin into remote bash; keep heredoc quoted so YAML doesn't expand it
+          /bin/echo "$REG_TOKEN" | ssh -o StrictHostKeyChecking=no -i /tmp/sshkey/id_rsa ubuntu@"$RUNNER_IP" 'bash -s' <<'REMOTE'
 set -euo pipefail
-# read token from stdin
 read TOKEN
-# ensure runner dir exists
 cd /opt/actions-runner || { echo "runner dir not found"; exit 1; }
-# run unattended config with the provided token
 sudo -u githubrunner bash -lc "./config.sh --unattended --url https://github.com/Recipies-Polyglot-Org --token \"$TOKEN\" --name runner-manual-$(hostname)-$(date +%s) --labels self-hosted,linux,X64 --work _work --replace || true"
-# create systemd service (idempotent)
+
 cat > /etc/systemd/system/github-runner.service <<'EOF'
 [Unit]
 Description=GitHub Actions Runner
