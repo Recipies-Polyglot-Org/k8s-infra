@@ -38,9 +38,6 @@ jobs:
             echo "Cluster already initialized."
           fi
 
-      
-
-
       - name: Ensure kubeconfig available to runner user
         run: |
           set -euo pipefail

@@ -151,3 +151,54 @@ jobs:
           ssh -o StrictHostKeyChecking=no -i /tmp/sshkey/id_rsa "ubuntu@${RUNNER_IP}" "sudo /bin/bash /tmp/register.sh '${REG_TOKEN}'"
 
           echo "registration ssh step completed"
+      
+      - name: Wait for runner to be online then dispatch infra-apply workflow
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
+          ORG: Recipies-Polyglot-Org
+          WORKFLOW_FILE: infra-apply.yaml   
+          REF: master                         
+        run: |
+          set -euo pipefail
+
+          # derive owner/repo from the current repository
+          OWNER_REPO="${{ github.repository }}"
+          OWNER="${OWNER_REPO%%/*}"
+          REPO="${OWNER_REPO#*/}"
+
+          echo "Owner: $OWNER, Repo: $REPO"
+
+          # Wait until at least one self-hosted runner in the org is online (timeout 3 minutes)
+          echo "Waiting for an online self-hosted runner in org ${ORG}..."
+          end=$((SECONDS + 180))
+          found=""
+          while [ $SECONDS -le $end ]; do
+            runners_json=$(curl -s -H "Authorization: token ${GH_PAT}" -H "Accept: application/vnd.github+json" "https://api.github.com/orgs/${ORG}/actions/runners")
+            # find any runner with status=online and a label named self-hosted
+            found=$(echo "$runners_json" | jq -r '.runners[] | select(.status=="online") | select(.labels[].name=="self-hosted") | .name' | head -n1 || true)
+            if [ -n "$found" ] && [ "$found" != "null" ]; then
+              echo "Found online self-hosted runner: $found"
+              break
+            fi
+            echo "No online runner yet. Sleeping 5s..."
+            sleep 5
+          done
+
+          if [ -z "$found" ] || [ "$found" = "null" ]; then
+            echo "Timed out waiting for an online self-hosted runner in org ${ORG} after 180s" >&2
+            # choose to fail the job or continue silently; we fail here so you notice
+            exit 1
+          fi
+
+          # Dispatch infra workflow in the same repository
+          echo "Dispatching workflow ${WORKFLOW_FILE} on ${REF} in ${OWNER}/${REPO}..."
+          resp=$(curl -s -o /dev/stderr -w "%{http_code}" -X POST \
+            -H "Authorization: token ${GH_PAT}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${OWNER}/${REPO}/actions/workflows/${WORKFLOW_FILE}/dispatches" \
+            -d "{\"ref\":\"${REF}\"}")
+          if [ "$resp" != "204" ]; then
+            echo "Failed to dispatch workflow: HTTP ${resp}" >&2
+            exit 1
+          fi
+          echo "Workflow dispatched successfully."
