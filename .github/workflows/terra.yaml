@@ -57,41 +57,23 @@ jobs:
           RUNNER_IP: ${{ steps.tfout.outputs.IP }}
           REG_TOKEN: ${{ steps.regtoken2.outputs.token }}
         run: |
+          set -euo pipefail
+
+          # prepare SSH key
           mkdir -p /tmp/sshkey
-          chmod 700 /tmp/sshkey
           echo "$SSH_KEY" > /tmp/sshkey/id_rsa
           chmod 600 /tmp/sshkey/id_rsa
 
-          # small pause for cloud-init to finish
+          # small pause so instance finishes boot/cloud-init
           sleep 10
 
-          # pass token via stdin into remote bash; keep heredoc quoted so YAML doesn't expand it
-          /bin/echo "$REG_TOKEN" | ssh -o StrictHostKeyChecking=no -i /tmp/sshkey/id_rsa ubuntu@"$RUNNER_IP" 'bash -s' <<'REMOTE'
-set -euo pipefail
-read TOKEN
-cd /opt/actions-runner || { echo "runner dir not found"; exit 1; }
-sudo -u githubrunner bash -lc "./config.sh --unattended --url https://github.com/Recipies-Polyglot-Org --token \"$TOKEN\" --name runner-manual-$(hostname)-$(date +%s) --labels self-hosted,linux,X64 --work _work --replace || true"
+          # Create the register script using printf (YAML-safe)
+          printf "%s\n" '#!/bin/bash' 'set -euo pipefail' '' 'TOKEN="$1"' 'RUNNER_DIR="/opt/actions-runner"' '' 'cd "$RUNNER_DIR" || { echo "runner dir not found"; exit 1; }' '' 'sudo -u githubrunner bash -lc "./config.sh --unattended --url https://github.com/Recipies-Polyglot-Org --token \"'$TOKEN'\" --name runner-manual-$(hostname)-$(date +%s) --labels self-hosted,linux,X64 --work _work --replace || true"' '' 'sudo bash -c '\''printf "%s\n" "[Unit]" "Description=GitHub Actions Runner" "After=network.target" "" "[Service]" "Type=simple" "User=githubrunner" "WorkingDirectory=/opt/actions-runner" "ExecStart=/opt/actions-runner/run.sh" "Restart=always" "RestartSec=5s" "" "[Install]" "WantedBy=multi-user.target" > /etc/systemd/system/github-runner.service'\''' > /tmp/register.sh
 
-cat > /etc/systemd/system/github-runner.service <<'EOF'
-[Unit]
-Description=GitHub Actions Runner
-After=network.target
+          chmod +x /tmp/register.sh
 
-[Service]
-Type=simple
-User=githubrunner
-WorkingDirectory=/opt/actions-runner
-ExecStart=/opt/actions-runner/run.sh
-Restart=always
-RestartSec=5s
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-systemctl daemon-reload
-systemctl enable --now github-runner.service || true
-systemctl status github-runner.service --no-pager || true
-REMOTE
+          # copy script to remote and execute with token argument
+          scp -o StrictHostKeyChecking=no -i /tmp/sshkey/id_rsa /tmp/register.sh ubuntu@"$RUNNER_IP":/tmp/register.sh
+          ssh -o StrictHostKeyChecking=no -i /tmp/sshkey/id_rsa ubuntu@"$RUNNER_IP" "sudo /bin/bash /tmp/register.sh '$REG_TOKEN'"
 
           echo "registration ssh step completed"
