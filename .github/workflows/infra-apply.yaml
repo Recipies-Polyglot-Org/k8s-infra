@@ -2,12 +2,12 @@ name: Infra Apply (Day-0 & Day-N)
 
 on:
   workflow_dispatch: {}                  # Day-0: run manually
-  # push:                                  # Day-N: re-apply base when infra changes
-  #   branches: [ "master" ]
-  #   paths:
-  #     - "base/**"
-  #     - "scripts/**"
-  #     - ".github/workflows/infra-apply.yaml"
+  push:                                  # Day-N: re-apply base when infra changes
+    branches: [ "master" ]
+    paths:
+      - "base/**"
+      - "scripts/**"
+      - ".github/workflows/infra-apply.yaml"
 
 concurrency:
   group: infra-apply
@@ -215,3 +215,4 @@ jobs:
         run: |
           kubectl get pods -n monitoring
           kubectl get svc -n monitoring
+
