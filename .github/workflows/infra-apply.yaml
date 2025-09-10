@@ -38,21 +38,63 @@ jobs:
             echo "Cluster already initialized."
           fi
 
-      # ---- Secrets (safe to re-run) ----
-      - name: Create/Update AWS Secret
+      
+
+
+      - name: Ensure kubeconfig available to runner user
         run: |
-          # wait for API server to be ready (max 5 minutes)
+          set -euo pipefail
+
+          # Path to admin kubeconfig created by kubeadm
+          ADMIN_KUBECONF=/etc/kubernetes/admin.conf
+          RUNNER_USER=githubrunner
+          RUNNER_HOME=/home/${RUNNER_USER}
+          RUNNER_KUBEDIR=${RUNNER_HOME}/.kube
+          RUNNER_KUBECONF=${RUNNER_KUBEDIR}/config
+
+          # Wait for admin.conf to exist (kubeadm may still be finishing)
+          end=$((SECONDS+300))
+          while [ ! -f "${ADMIN_KUBECONF}" ]; do
+            if [ $SECONDS -gt $end ]; then
+              echo "admin.conf not found after wait; aborting" >&2
+              ls -l /etc/kubernetes || true
+              exit 1
+            fi
+            sleep 3
+          done
+
+          # Create .kube for runner user and copy admin.conf (idempotent)
+          sudo mkdir -p "${RUNNER_KUBEDIR}"
+          sudo cp -f "${ADMIN_KUBECONF}" "${RUNNER_KUBECONF}"
+          sudo chown -R ${RUNNER_USER}:${RUNNER_USER} "${RUNNER_KUBEDIR}"
+          sudo chmod 640 "${RUNNER_KUBECONF}"
+
+          # Export KUBECONFIG for the rest of this job (so kubectl in this step sees it)
+          echo "KUBECONFIG=${RUNNER_KUBECONF}" >> $GITHUB_ENV
+
+      
+      - name: Wait for API server to be ready (using kubeconfig)
+        run: |
+          set -euo pipefail
+          # ensure kubectl uses the KUBECONFIG exported earlier
+          export KUBECONFIG="${KUBECONFIG:-/home/githubrunner/.kube/config}"
           end=$((SECONDS+300))
           until kubectl get --raw="/healthz" >/dev/null 2>&1; do
             if [ $SECONDS -gt $end ]; then
               echo "timed out waiting for API server" >&2
               kubectl get pods -A || true
+              kubectl cluster-info || true
               exit 1
             fi
             sleep 5
           done
           echo "API server ready"
 
+      
+      
+      # ---- Secrets (safe to re-run) ----
+      - name: Create/Update AWS Secret
+        run: |
           kubectl create secret generic aws-secrets \
             --from-literal=AWS_ACCESS_KEY_ID='${{ secrets.AWS_ACCESS_KEY_ID }}' \
             --from-literal=AWS_SECRET_ACCESS_KEY='${{ secrets.AWS_SECRET_ACCESS_KEY }}' \
@@ -227,5 +269,6 @@ jobs:
         run: |
           kubectl get pods -n monitoring
           kubectl get svc -n monitoring
+
 
 
