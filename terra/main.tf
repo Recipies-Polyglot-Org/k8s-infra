@@ -9,21 +9,10 @@ provider "aws" {
   region = var.aws_region
 }
 
-variable "aws_region"    { type = string, default = "us-east-1" }
-variable "ami"           { type = string, default = "ami-04f59c565deeb2199" }
-variable "instance_type" { type = string, default = "t2.large" }
-variable "key_name"      { type = string, default = "akshatnv" }
-variable "root_size_gb"  { type = number, default = 80 }
-variable "github_org"    { type = string, default = "Recipies-Polyglot-Org" }
-variable "runner_labels" { type = string, default = "self-hosted,linux,X64" }
-
-# ephemeral registration token passed from workflow
-variable "runner_reg_token" { type = string, sensitive = true }
-
 # Use the default security group in the account/VPC
 data "aws_default_security_group" "default" {}
 
-# Render userdata using built-in templatefile() — no extra provider required
+# Render userdata using builtin templatefile()
 locals {
   userdata_rendered = templatefile("${path.module}/userdata.tpl", {
     registration_token = var.runner_reg_token
