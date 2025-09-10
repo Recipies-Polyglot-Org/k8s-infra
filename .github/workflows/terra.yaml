@@ -40,14 +40,54 @@ jobs:
             -var "dynamodb_table=terraform-state-lock" \
             -var "environment=prod"
           # capture outputs via terraform output -json
-      - name: Read bootstrap outputs
+          
+      - name: Read bootstrap outputs (robust)
         id: out
         working-directory: bootstrap-backend
         run: |
-          jq -r '.s3_bucket.value // .s3_bucket' < <(terraform output -json) > /tmp/bucket.txt
-          jq -r '.dynamodb_table.value // .dynamodb_table' < <(terraform output -json) > /tmp/table.txt
-          echo "::set-output name=bucket::$(cat /tmp/bucket.txt)"
-          echo "::set-output name=table::$(cat /tmp/table.txt)"
+          set -euo pipefail
+
+          # capture terraform output to a file so we can inspect it on errors
+          terraform output -json > /tmp/tfout.json 2>/tmp/tfout.err || true
+
+          # if the json file is empty or contains non-json, show helpful diagnostics
+          if [ ! -s /tmp/tfout.json ]; then
+            echo "ERROR: terraform output -json produced no JSON (empty file)." >&2
+            echo "=== terraform stderr ===" >&2
+            sed -n '1,200p' /tmp/tfout.err >&2 || true
+            exit 1
+          fi
+
+          # quick sanity check: ensure /tmp/tfout.json is valid JSON
+          if ! jq empty /tmp/tfout.json >/dev/null 2>&1; then
+            echo "ERROR: terraform output -json produced invalid JSON:" >&2
+            sed -n '1,200p' /tmp/tfout.json >&2 || true
+            exit 1
+          fi
+
+          # Try a few common output field names robustly (handles nested .value or direct values)
+          # Priority: s3_bucket, dynamodb_table
+          S3_BUCKET=$(jq -r '(.s3_bucket.value // .s3_bucket // .s3_bucket[0] // empty) | tostring' /tmp/tfout.json || true)
+          DDB_TABLE=$(jq -r '(.dynamodb_table.value // .dynamodb_table // .dynamodb_table[0] // empty) | tostring' /tmp/tfout.json || true)
+
+          if [ -z "$S3_BUCKET" ] || [ "$S3_BUCKET" = "null" ]; then
+            echo "ERROR: could not find s3_bucket in terraform output JSON. Full output below:" >&2
+            sed -n '1,200p' /tmp/tfout.json >&2 || true
+            exit 1
+          fi
+          if [ -z "$DDB_TABLE" ] || [ "$DDB_TABLE" = "null" ]; then
+            echo "ERROR: could not find dynamodb_table in terraform output JSON. Full output below:" >&2
+            sed -n '1,200p' /tmp/tfout.json >&2 || true
+            exit 1
+          fi
+
+          # write outputs for GitHub Actions (modern safe method)
+          printf "bucket=%s\n" "$S3_BUCKET" >> "$GITHUB_OUTPUT"
+          printf "table=%s\n" "$DDB_TABLE" >> "$GITHUB_OUTPUT"
+
+          # also print so logs show values (masked if secrets)
+          echo "Bootstrap outputs: bucket=$S3_BUCKET, table=$DDB_TABLE"
+
 
   terraform:
     needs: bootstrap-backend
