@@ -32,8 +32,3 @@ variable "runner_labels" {
   type    = string
   default = "self-hosted,linux,X64"
 }
-
-variable "runner_reg_token" {
-  type      = string
-  sensitive = true
-}

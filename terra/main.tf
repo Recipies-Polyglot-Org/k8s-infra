@@ -9,20 +9,16 @@ provider "aws" {
   region = var.aws_region
 }
 
-# Render userdata using builtin templatefile()
+# Render userdata using builtin templatefile() (no token required)
 locals {
-  userdata_rendered = templatefile("${path.module}/userdata.tpl", {
-    registration_token = var.runner_reg_token
-    github_org         = var.github_org
-    runner_labels      = var.runner_labels
-  })
+  userdata_rendered = templatefile("${path.module}/userdata.tpl", {})
 }
 
 resource "aws_instance" "runner" {
   ami           = var.ami
   instance_type = var.instance_type
   key_name      = var.key_name
-  # intentionally do not set vpc_security_group_ids so default SG is used
+  # default SG will be used when vpc_security_group_ids is omitted
   user_data = local.userdata_rendered
 
   root_block_device {

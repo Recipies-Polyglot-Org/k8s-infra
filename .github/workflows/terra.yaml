@@ -1,4 +1,4 @@
-name: Deploy Runner (Terraform) - secure token flow
+name: Deploy Runner (Terraform) - post-apply registration
 
 on:
   workflow_dispatch:
@@ -22,8 +22,24 @@ jobs:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
 
-      - name: Request GitHub org registration token
-        id: regtoken
+      - name: Terraform Init
+        working-directory: terra
+        run: terraform init -input=false -no-color
+
+      - name: Terraform Apply
+        working-directory: terra
+        run: terraform apply -auto-approve -input=false -no-color
+
+      - name: Get runner public IP
+        working-directory: terra
+        id: tfout
+        run: |
+          # output runner_public_ip as workflow output
+          IP=$(terraform output -raw runner_public_ip)
+          echo "IP=$IP" >> "$GITHUB_OUTPUT"
+
+      - name: Request fresh GitHub org registration token
+        id: regtoken2
         run: |
           ORG="Recipies-Polyglot-Org"
           RESP=$(curl -s -X POST -H "Authorization: token ${{ secrets.GH_PAT }}" -H "Accept: application/vnd.github+json" "https://api.github.com/orgs/${ORG}/actions/runners/registration-token")
@@ -33,21 +49,52 @@ jobs:
             echo "$RESP" >&2
             exit 1
           fi
-          # Use GITHUB_OUTPUT (recommended) to pass the token
           echo "token=$TOKEN" >> "$GITHUB_OUTPUT"
 
-      - name: Terraform Init
-        working-directory: terra
-        run: terraform init -input=false -no-color
-
-
-      - name: Terraform Apply (with ephemeral token)
-        working-directory: terra
+      - name: Register runner via SSH (use fresh token)
+        id: sshreg
         env:
-          TF_VAR_runner_reg_token: ${{ steps.regtoken.outputs.token }}
-          TF_VAR_aws_region: "us-east-1"
-          TF_VAR_ami: "ami-04f59c565deeb2199"
-          TF_VAR_instance_type: "t2.large"
-          TF_VAR_key_name: "akshatnv"
-          TF_VAR_root_size_gb: "80"
-        run: terraform apply -auto-approve
+          SSH_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          RUNNER_IP: ${{ steps.tfout.outputs.IP }}
+          REG_TOKEN: ${{ steps.regtoken2.outputs.token }}
+        run: |
+          mkdir -p /tmp/sshkey && chmod 700 /tmp/sshkey
+          echo "$SSH_KEY" > /tmp/sshkey/id_rsa
+          chmod 600 /tmp/sshkey/id_rsa
+
+          # wait a few seconds for cloud-init to finish -> adjust sleep if your AMI needs more boot time
+          sleep 10
+
+          # pipe the token into the remote script so token isn't echoed in logs
+          echo "$REG_TOKEN" | ssh -o StrictHostKeyChecking=no -i /tmp/sshkey/id_rsa ubuntu@$RUNNER_IP 'bash -s' <<'REMOTE'
+set -euo pipefail
+# read token from stdin
+read TOKEN
+# ensure runner dir exists
+cd /opt/actions-runner || { echo "runner dir not found"; exit 1; }
+# run unattended config with the provided token
+sudo -u githubrunner bash -lc "./config.sh --unattended --url https://github.com/Recipies-Polyglot-Org --token \"$TOKEN\" --name runner-manual-$(hostname)-$(date +%s) --labels self-hosted,linux,X64 --work _work --replace || true"
+# create systemd service (idempotent)
+cat > /etc/systemd/system/github-runner.service <<'EOF'
+[Unit]
+Description=GitHub Actions Runner
+After=network.target
+
+[Service]
+Type=simple
+User=githubrunner
+WorkingDirectory=/opt/actions-runner
+ExecStart=/opt/actions-runner/run.sh
+Restart=always
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+systemctl daemon-reload
+systemctl enable --now github-runner.service || true
+systemctl status github-runner.service --no-pager || true
+REMOTE
+
+          echo "registration ssh step completed"
