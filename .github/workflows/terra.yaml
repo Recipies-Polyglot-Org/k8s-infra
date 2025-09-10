@@ -30,22 +30,17 @@ jobs:
         working-directory: terra
         run: terraform apply -auto-approve -input=false -no-color
 
-      - name: Get runner public IP
-        working-directory: terra
+      - name: Get runner public IP (via AWS CLI)
         id: tfout
         run: |
-          # Use JSON output and jq to safely extract runner_public_ip
-          RAW_JSON=$(terraform output -json 2>/dev/null || echo "{}")
-          # try to get the value; supports both string and list types
-          IP=$(printf "%s" "$RAW_JSON" | jq -r '.runner_public_ip | if type=="string" then . else .[0] end' 2>/dev/null || true)
-          # fallback: try the raw -raw output but sanitize
-          if [ -z "$IP" ] || [ "$IP" = "null" ]; then
-            IP_RAW=$(terraform output -raw runner_public_ip 2>/dev/null || true)
-            IP=$(printf "%s" "$IP_RAW" | awk '{print $1}' | tr -d '\r\n')
-          fi
-          if [ -z "$IP" ] || [ "$IP" = "null" ]; then
-            echo "Error: runner_public_ip is empty" >&2
-            echo "terraform output -json was: $RAW_JSON" >&2
+          # find running instance by Name tag "Akshat-terra" and get its public IP
+          IP=$(aws ec2 describe-instances \
+            --filters "Name=tag:Name,Values=Akshat-terra" "Name=instance-state-name,Values=running" \
+            --query "Reservations[].Instances[].PublicIpAddress" --output text | awk '{print $1}')
+          IP=$(printf "%s" "$IP" | tr -d '\r\n')
+          if [ -z "$IP" ] || [ "$IP" = "None" ]; then
+            echo "Error: could not find public IP for instance with Name=Akshat-terra" >&2
+            aws ec2 describe-instances --filters "Name=tag:Name,Values=Akshat-terra" --query "Reservations[].Instances[].[InstanceId,State.Name,PublicIpAddress,Tags]" --output table >&2 || true
             exit 1
           fi
           printf "IP=%s\n" "$IP" >> "$GITHUB_OUTPUT"
