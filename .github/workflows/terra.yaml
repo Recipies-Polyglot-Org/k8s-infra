@@ -1,7 +1,7 @@
 name: Deploy Runner (Terraform) - post-apply registration
 
 on:
-  workflow_dispatch:
+  workflow_dispatch: {}
 
 jobs:
   terraform:
