@@ -1,0 +1,52 @@
+name: Deploy Runner (Terraform) - secure token flow
+
+on:
+  workflow_dispatch:
+
+jobs:
+  terraform:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: "1.5.0"
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-region: us-east-1
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+      - name: Request GitHub org registration token
+        id: regtoken
+        run: |
+          ORG="Recipies-Polyglot-Org"
+          RESP=$(curl -s -X POST -H "Authorization: token ${{ secrets.GH_RUNNER_PAT }}" -H "Accept: application/vnd.github+json" "https://api.github.com/orgs/${ORG}/actions/runners/registration-token")
+          TOKEN=$(echo "$RESP" | jq -r .token)
+          if [ -z "$TOKEN" ] || [ "$TOKEN" = "null" ]; then
+            echo "Failed to obtain registration token"
+            echo "$RESP" >&2
+            exit 1
+          fi
+          # Use GITHUB_OUTPUT (recommended) to pass the token
+          echo "token=$TOKEN" >> "$GITHUB_OUTPUT"
+
+      - name: Terraform Init
+        working-directory: terra
+        run: terraform init
+
+      - name: Terraform Apply (with ephemeral token)
+        working-directory: terra
+        env:
+          TF_VAR_runner_reg_token: ${{ steps.regtoken.outputs.token }}
+          TF_VAR_aws_region: "us-east-1"
+          TF_VAR_ami: "ami-04f59c565deeb2199"
+          TF_VAR_instance_type: "t2.large"
+          TF_VAR_key_name: "akshatnv"
+          TF_VAR_root_size_gb: "80"
+        run: terraform apply -auto-approve
