@@ -35,7 +35,7 @@ variable "runner_labels" {
 
 variable "backend_bucket" {
   type = string
-  default = "your-unique-bucket-name" # replace or pass via -backend-config
+  default = "akshat-recipes-polyglot-tfstate"
 }
 
 variable "backend_key" {
@@ -45,5 +45,5 @@ variable "backend_key" {
 
 variable "backend_dynamodb_table" {
   type = string
-  default = "terraform-state-lock"
+  default = "akshat-recipes-polyglot-locks"
 }

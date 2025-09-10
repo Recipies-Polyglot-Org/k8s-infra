@@ -72,10 +72,10 @@ jobs:
         working-directory: terra
         run: |
           terraform init -input=false -no-color \
-            -backend-config="bucket=recipes-polyglot-terraform-state-123456789" \
+            -backend-config="bucket=akshat-recipes-polyglot-tfstate" \
             -backend-config="key=k8s-infra/terraform.tfstate" \
             -backend-config="region=us-east-1" \
-            -backend-config="dynamodb_table=terraform-state-lock" \
+            -backend-config="dynamodb_table=akshat-recipes-polyglot-lock" \
             -backend-config="encrypt=true"
 
       - name: Terraform Apply
