@@ -1,10 +1,56 @@
-name: Deploy Runner (Terraform) - post-apply registration
+name: Deploy Runner + Bootstrap Backend + Terra
 
 on:
   workflow_dispatch:
 
 jobs:
+  bootstrap-backend:
+    runs-on: ubuntu-latest
+    outputs:
+      state_bucket: ${{ steps.out.outputs.bucket }}
+      dynamodb_table: ${{ steps.out.outputs.table }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: "1.5.0"
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-region: us-east-1
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+      - name: Terraform Init (bootstrap backend)
+        working-directory: bootstrap-backend
+        run: terraform init -input=false -no-color
+
+      - name: Terraform Apply (bootstrap backend)
+        id: apply
+        working-directory: bootstrap-backend
+        run: |
+          # Use deterministic bucket name OR pass in via workflow inputs/secrets
+          TF_VAR_bucket_name="${{ secrets.TFSTATE_BUCKET_NAME }}" || true
+          terraform apply -auto-approve -input=false -no-color \
+            -var "bucket_name=${TF_VAR_bucket_name:-recipes-polyglot-state-$(date +%s)}" \
+            -var "dynamodb_table=terraform-state-lock" \
+            -var "environment=prod"
+          # capture outputs via terraform output -json
+      - name: Read bootstrap outputs
+        id: out
+        working-directory: bootstrap-backend
+        run: |
+          jq -r '.s3_bucket.value // .s3_bucket' < <(terraform output -json) > /tmp/bucket.txt
+          jq -r '.dynamodb_table.value // .dynamodb_table' < <(terraform output -json) > /tmp/table.txt
+          echo "::set-output name=bucket::$(cat /tmp/bucket.txt)"
+          echo "::set-output name=table::$(cat /tmp/table.txt)"
+
   terraform:
+    needs: bootstrap-backend
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -24,11 +70,17 @@ jobs:
 
       - name: Terraform Init
         working-directory: terra
-        run: terraform init -input=false -no-color
+        run: |
+          terraform init -input=false -no-color \
+            -backend-config="bucket=recipes-polyglot-terraform-state-123456789" \
+            -backend-config="key=k8s-infra/terraform.tfstate" \
+            -backend-config="region=us-east-1" \
+            -backend-config="dynamodb_table=terraform-state-lock" \
+            -backend-config="encrypt=true"
 
       - name: Terraform Apply
         working-directory: terra
-        run: terraform apply -auto-approve -input=false -no-color
+        run: terraform apply -lock-timeout=10m -auto-approve -input=false -no-color
 
       - name: Get runner public IP (via AWS CLI)
         id: tfout
