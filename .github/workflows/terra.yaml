@@ -34,8 +34,17 @@ jobs:
         working-directory: terra
         id: tfout
         run: |
-          IP=$(terraform output -raw runner_public_ip)
-          echo "IP=$IP" >> "$GITHUB_OUTPUT"
+          # use -raw and then sanitize: take first non-empty line and strip CR/LF
+          IP_RAW=$(terraform output -raw runner_public_ip 2>/dev/null || true)
+          # keep only the first whitespace-delimited token, remove CR/LF
+          IP=$(printf "%s" "$IP_RAW" | awk '{print $1}' | tr -d '\r\n')
+          if [ -z "$IP" ]; then
+            echo "Error: runner_public_ip is empty" >&2
+            exit 1
+          fi
+          # write workflow output safely
+          printf "IP=%s\n" "$IP" >> "$GITHUB_OUTPUT"
+
 
       - name: Request fresh GitHub org registration token
         id: regtoken2
