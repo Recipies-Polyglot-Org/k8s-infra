@@ -41,52 +41,74 @@ jobs:
             -var "environment=prod"
           # capture outputs via terraform output -json
           
-      - name: Read bootstrap outputs (robust)
+      - name: Read bootstrap outputs (robust + sanitize)
         id: out
         working-directory: bootstrap-backend
         run: |
           set -euo pipefail
 
-          # capture terraform output to a file so we can inspect it on errors
-          terraform output -json > /tmp/tfout.json 2>/tmp/tfout.err || true
+          # capture terraform output to a file (keep stderr separate)
+          /home/runner/work/_temp/terraform-bin output -json > /tmp/tfout.raw 2>/tmp/tfout.err || true
+          # (if you use a different terraform binary, use `terraform` instead of the explicit path above)
 
-          # if the json file is empty or contains non-json, show helpful diagnostics
-          if [ ! -s /tmp/tfout.json ]; then
-            echo "ERROR: terraform output -json produced no JSON (empty file)." >&2
-            echo "=== terraform stderr ===" >&2
-            sed -n '1,200p' /tmp/tfout.err >&2 || true
+          # show a tiny preview so logs contain helpful debug info
+          echo "=== terraform stdout preview ==="
+          sed -n '1,120p' /tmp/tfout.raw || true
+          echo "=== terraform stderr preview ==="
+          sed -n '1,120p' /tmp/tfout.err || true
+
+          # Extract the first JSON object found in the file by locating the first '{' and last '}'.
+          # This strips any leading/trailing noise that can break jq parsing in CI.
+          RAW="$(cat /tmp/tfout.raw || true)"
+          # Find index of first '{' and last '}', then slice.
+          FIRST=$(expr index "$RAW" '{' || echo 0)
+          LAST_IDX=$(awk 'BEGIN{RS="";} { print length($0) }' <<< "$RAW") || true
+          # If no '{' found, fail with diagnostics
+          if [ "$FIRST" -eq 0 ]; then
+            echo "ERROR: no JSON object found in terraform output file. Full raw output:" >&2
+            sed -n '1,300p' /tmp/tfout.raw >&2 || true
             exit 1
           fi
 
-          # quick sanity check: ensure /tmp/tfout.json is valid JSON
+          # Extract substring: from FIRST to last '}' in the raw content.
+          # Use awk to print from the first '{' to the last '}'.
+          JSON_CLEAN=$(awk 'BEGIN{found=0} { for(i=1;i<=length($0);i++){c=substr($0,i,1); if(c=="{" && found==0){start=i; found=1} if(c=="}"){end=i} } } END{ if(found==1) print substr($0,start,end-start+1); }' /tmp/tfout.raw || true)
+
+          if [ -z "$JSON_CLEAN" ]; then
+            echo "ERROR: failed to sanitize JSON from terraform output. Raw file:" >&2
+            sed -n '1,300p' /tmp/tfout.raw >&2 || true
+            exit 1
+          fi
+
+          # write sanitized JSON to a file and validate
+          printf "%s\n" "$JSON_CLEAN" > /tmp/tfout.json
           if ! jq empty /tmp/tfout.json >/dev/null 2>&1; then
-            echo "ERROR: terraform output -json produced invalid JSON:" >&2
-            sed -n '1,200p' /tmp/tfout.json >&2 || true
+            echo "ERROR: sanitized terraform output is not valid JSON. Content:" >&2
+            sed -n '1,300p' /tmp/tfout.json >&2 || true
             exit 1
           fi
 
-          # Try a few common output field names robustly (handles nested .value or direct values)
-          # Priority: s3_bucket, dynamodb_table
-          S3_BUCKET=$(jq -r '(.s3_bucket.value // .s3_bucket // .s3_bucket[0] // empty) | tostring' /tmp/tfout.json || true)
-          DDB_TABLE=$(jq -r '(.dynamodb_table.value // .dynamodb_table // .dynamodb_table[0] // empty) | tostring' /tmp/tfout.json || true)
+          # Pull outputs (supports .value wrapper or direct value or single-element arrays)
+          S3_BUCKET=$(jq -r '(.s3_bucket.value // .s3_bucket // (.s3_bucket[0] // empty) // empty) | tostring' /tmp/tfout.json || true)
+          DDB_TABLE=$(jq -r '(.dynamodb_table.value // .dynamodb_table // (.dynamodb_table[0] // empty) // empty) | tostring' /tmp/tfout.json || true)
 
           if [ -z "$S3_BUCKET" ] || [ "$S3_BUCKET" = "null" ]; then
-            echo "ERROR: could not find s3_bucket in terraform output JSON. Full output below:" >&2
-            sed -n '1,200p' /tmp/tfout.json >&2 || true
+            echo "ERROR: could not extract s3_bucket from terraform output. Full sanitized JSON:" >&2
+            sed -n '1,300p' /tmp/tfout.json >&2 || true
             exit 1
           fi
           if [ -z "$DDB_TABLE" ] || [ "$DDB_TABLE" = "null" ]; then
-            echo "ERROR: could not find dynamodb_table in terraform output JSON. Full output below:" >&2
-            sed -n '1,200p' /tmp/tfout.json >&2 || true
+            echo "ERROR: could not extract dynamodb_table from terraform output. Full sanitized JSON:" >&2
+            sed -n '1,300p' /tmp/tfout.json >&2 || true
             exit 1
           fi
 
-          # write outputs for GitHub Actions (modern safe method)
+          # Write outputs for GitHub Actions
           printf "bucket=%s\n" "$S3_BUCKET" >> "$GITHUB_OUTPUT"
           printf "table=%s\n" "$DDB_TABLE" >> "$GITHUB_OUTPUT"
 
-          # also print so logs show values (masked if secrets)
           echo "Bootstrap outputs: bucket=$S3_BUCKET, table=$DDB_TABLE"
+
 
 
   terraform:
