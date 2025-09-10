@@ -23,13 +23,13 @@ variable "runner_reg_token" { type = string, sensitive = true }
 # Use the default security group in the account/VPC
 data "aws_default_security_group" "default" {}
 
-data "template_file" "userdata" {
-  template = file("${path.module}/userdata.tpl")
-  vars = {
+# Render userdata using built-in templatefile() — no extra provider required
+locals {
+  userdata_rendered = templatefile("${path.module}/userdata.tpl", {
     registration_token = var.runner_reg_token
     github_org         = var.github_org
     runner_labels      = var.runner_labels
-  }
+  })
 }
 
 resource "aws_instance" "runner" {
@@ -37,7 +37,7 @@ resource "aws_instance" "runner" {
   instance_type          = var.instance_type
   key_name               = var.key_name
   vpc_security_group_ids = [data.aws_default_security_group.default.id]
-  user_data              = data.template_file.userdata.rendered
+  user_data              = local.userdata_rendered
 
   root_block_device {
     volume_size = var.root_size_gb

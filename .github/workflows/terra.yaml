@@ -38,7 +38,8 @@ jobs:
 
       - name: Terraform Init
         working-directory: terra
-        run: terraform init
+        run: terraform init -input=false -no-color
+
 
       - name: Terraform Apply (with ephemeral token)
         working-directory: terra
