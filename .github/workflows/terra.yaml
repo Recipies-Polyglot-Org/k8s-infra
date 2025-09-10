@@ -34,17 +34,13 @@ jobs:
         working-directory: terra
         id: tfout
         run: |
-          # use -raw and then sanitize: take first non-empty line and strip CR/LF
-          IP_RAW=$(terraform output -raw runner_public_ip 2>/dev/null || true)
-          # keep only the first whitespace-delimited token, remove CR/LF
-          IP=$(printf "%s" "$IP_RAW" | awk '{print $1}' | tr -d '\r\n')
-          if [ -z "$IP" ]; then
+          RAW=$(terraform output -raw runner_public_ip 2>/dev/null || true)
+          TOK=$(printf "%s" "$RAW" | awk '{print $1}' | tr -d '\r\n')
+          if [ -z "$TOK" ]; then
             echo "Error: runner_public_ip is empty" >&2
             exit 1
           fi
-          # write workflow output safely
-          printf "IP=%s\n" "$IP" >> "$GITHUB_OUTPUT"
-
+          printf "IP=%s\n" "$TOK" >> "$GITHUB_OUTPUT"
 
       - name: Request fresh GitHub org registration token
         id: regtoken2
@@ -57,7 +53,7 @@ jobs:
             echo "$RESP" >&2
             exit 1
           fi
-          echo "token=$TOKEN" >> "$GITHUB_OUTPUT"
+          printf "token=%s\n" "$TOKEN" >> "$GITHUB_OUTPUT"
 
       - name: Register runner via SSH (use fresh token)
         id: sshreg
@@ -68,20 +64,32 @@ jobs:
         run: |
           set -euo pipefail
 
-          # prepare SSH key
+          if [ -z "${RUNNER_IP:-}" ]; then
+            echo "RUNNER_IP is empty; aborting" >&2
+            exit 1
+          fi
+
           mkdir -p /tmp/sshkey
           echo "$SSH_KEY" > /tmp/sshkey/id_rsa
           chmod 600 /tmp/sshkey/id_rsa
 
-          # small pause so instance finishes boot/cloud-init
           sleep 10
 
-          # Create the register script using printf (YAML-safe)
-          printf "%s\n" '#!/bin/bash' 'set -euo pipefail' '' 'TOKEN="$1"' 'RUNNER_DIR="/opt/actions-runner"' '' 'cd "$RUNNER_DIR" || { echo "runner dir not found"; exit 1; }' '' 'sudo -u githubrunner bash -lc "./config.sh --unattended --url https://github.com/Recipies-Polyglot-Org --token \"'$TOKEN'\" --name runner-manual-$(hostname)-$(date +%s) --labels self-hosted,linux,X64 --work _work --replace || true"' '' 'sudo bash -c '\''printf "%s\n" "[Unit]" "Description=GitHub Actions Runner" "After=network.target" "" "[Service]" "Type=simple" "User=githubrunner" "WorkingDirectory=/opt/actions-runner" "ExecStart=/opt/actions-runner/run.sh" "Restart=always" "RestartSec=5s" "" "[Install]" "WantedBy=multi-user.target" > /etc/systemd/system/github-runner.service'\''' > /tmp/register.sh
+          cat > /tmp/register.sh <<'SCRIPT'
+          #!/bin/bash
+          set -euo pipefail
+          TOKEN="$1"
+          RUNNER_DIR="/opt/actions-runner"
+          cd "$RUNNER_DIR" || { echo "runner dir not found"; exit 1; }
+          sudo -u githubrunner bash -lc "./config.sh --unattended --url https://github.com/Recipies-Polyglot-Org --token \"$TOKEN\" --name runner-manual-$(hostname)-$(date +%s) --labels self-hosted,linux,X64 --work _work --replace || true"
+          sudo bash -lc 'printf "%s\n" "[Unit]" "Description=GitHub Actions Runner" "After=network.target" "" "[Service]" "Type=simple" "User=githubrunner" "WorkingDirectory=/opt/actions-runner" "ExecStart=/opt/actions-runner/run.sh" "Restart=always" "RestartSec=5s" "" "[Install]" "WantedBy=multi-user-target" > /etc/systemd/system/github-runner.service' || true
+          sudo systemctl daemon-reload || true
+          sudo systemctl enable --now github-runner.service || true
+          sudo systemctl status github-runner.service --no-pager || true
+          SCRIPT
 
           chmod +x /tmp/register.sh
 
-          # copy script to remote and execute with token argument
           scp -o StrictHostKeyChecking=no -i /tmp/sshkey/id_rsa /tmp/register.sh ubuntu@"$RUNNER_IP":/tmp/register.sh
           ssh -o StrictHostKeyChecking=no -i /tmp/sshkey/id_rsa ubuntu@"$RUNNER_IP" "sudo /bin/bash /tmp/register.sh '$REG_TOKEN'"
 
