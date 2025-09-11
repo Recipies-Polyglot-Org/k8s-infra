@@ -33,13 +33,7 @@ jobs:
         id: apply
         working-directory: bootstrap-backend
         run: |
-          # Use deterministic bucket name OR pass in via workflow inputs/secrets
-          TF_VAR_bucket_name="${{ secrets.TFSTATE_BUCKET_NAME }}" || true
-          terraform apply -auto-approve -input=false -no-color \
-            -var "bucket_name=${TF_VAR_bucket_name:-recipes-polyglot-state-$(date +%s)}" \
-            -var "dynamodb_table=terraform-state-lock" \
-            -var "environment=prod"
-          # capture outputs via terraform output -json
+          terraform apply -auto-approve -input=false -no-color 
           
       - name: Read bootstrap outputs (robust Python brace-matching)
         id: out
@@ -153,12 +147,7 @@ jobs:
       - name: Terraform Init
         working-directory: terra
         run: |
-          terraform init -input=false -no-color \
-            -backend-config="bucket=akshat-recipes-polyglot-tfstate" \
-            -backend-config="key=k8s-infra/terraform.tfstate" \
-            -backend-config="region=us-east-1" \
-            -backend-config="dynamodb_table=akshat-recipes-polyglot-lock" \
-            -backend-config="encrypt=true"
+          terraform init -input=false -no-color 
 
       - name: Terraform Apply
         working-directory: terra
