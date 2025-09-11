@@ -3,6 +3,7 @@ name: Deploy Runner + Terra
 on:
   workflow_dispatch:
 
+jobs:
   terraform:
     runs-on: ubuntu-latest
     steps:
