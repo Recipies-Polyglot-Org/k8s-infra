@@ -1,9 +1,9 @@
 terraform {
   backend "s3" {
-    bucket         = var.backend_bucket     # or hardcode the name
-    key            = var.backend_key        # e.g. "k8s-infra/terraform.tfstate"
-    region         = var.aws_region
-    dynamodb_table = var.backend_dynamodb_table
+    bucket         = "akshat-recipes-polyglot-tfstate"    # or hardcode the name
+    key            = "k8s-infra/terraform.tfstate"       # e.g. "k8s-infra/terraform.tfstate"
+    region         = "us-east-1"
+    dynamodb_table = "akshat-recipes-polyglot-locks"
     encrypt        = true
   }
 }
